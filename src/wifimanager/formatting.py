@@ -35,8 +35,13 @@ def access_text(device: dict[str, Any]) -> str:
 
 
 def usage_text(device: dict[str, Any]) -> str:
-    """Données consommées par un appareil : « ↓ 1,2 Go   ↑ 80 Mo », suivi de « (estimé) » si elles sont partagées."""
-    text = f"↓ {format_bytes(int(device.get('downloaded') or 0))}   ↑ {format_bytes(int(device.get('uploaded') or 0))}"
+    """Données d'un appareil : « 1,2 Go reçus · 80 Mo envoyés », suivi de « (estimé) » si elles sont partagées.
+
+    Des mots plutôt que des flèches : Windows affiche les flèches ↓ ↑ comme des emojis en couleurs vives.
+    """
+    received = format_bytes(int(device.get("downloaded") or 0))
+    sent = format_bytes(int(device.get("uploaded") or 0))
+    text = f"{received} reçus  ·  {sent} envoyés"
     return text + " (estimé)" if device.get("estimated") else text
 
 

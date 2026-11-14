@@ -55,10 +55,13 @@ Interface Qt (utilisateur)  ──canal local──►  Service WifiManager (adm
 - [x] **Données consommées** : total exact (compteurs de l'adaptateur) ; par appareil exact s'il est seul, estimé sinon
 - [x] Service de blocage installable (tâche planifiée à l'ouverture de session, une seule fenêtre UAC) et désactivable
 - [x] Mot de passe du hotspot conservé chiffré (DPAPI) pour réafficher le QR code
+- [x] **Maintenir allumé** : relance le hotspot s'il s'éteint ET le service de blocage s'il s'arrête (limite d'essais, la tâche
+      planifiée redémarre aussi le service en cas de plantage)
+- [x] **Interface moderne** : cartes arrondies, interrupteurs, avatars, pastilles d'accès, thème clair ou sombre qui suit Windows
 - [x] Test de bout en bout sur le vrai PC : service administrateur + client non élevé (blocage, accès temporaire, arrêt)
 - [ ] Démarrer, arrêter, changer le mot de passe : testés avec un exécuteur factice, **pas encore sur le vrai hotspot**
 - [ ] Mesure exacte des données par appareil quand plusieurs sont connectés (demande une capture de paquets)
-- [ ] Icône, zone de notification
+- [ ] Icône de l'application, zone de notification
 - [ ] Installateur
 
 ## Limites connues
@@ -68,3 +71,5 @@ Interface Qt (utilisateur)  ──canal local──►  Service WifiManager (adm
 - Un appareil bloqué reste connecté au Wi-Fi : il n'a simplement plus Internet. Seul un changement de mot de passe le déconnecte.
 - Les données consommées pendant que le service est arrêté ne sont pas comptées.
 - Si le service s'arrête, les blocages disparaissent (session dynamique) : choix de sûreté, jamais de blocage orphelin.
+- L'extinction automatique de Windows (« Économie d'énergie » du point d'accès mobile) n'est pas désactivée par l'application :
+  aucun réglage fiable n'a pu être vérifié. Le maintien allumé relance le hotspot quelle que soit la cause.

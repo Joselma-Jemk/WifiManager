@@ -46,9 +46,9 @@ def test_access_text(device: dict, text: str) -> None:
 
 
 def test_usage_text_flags_estimates() -> None:
-    assert usage_text({"downloaded": 1_200_000_000, "uploaded": 80_000_000}) == "↓ 1,2 Go   ↑ 80 Mo"
-    assert usage_text({"downloaded": 10, "uploaded": 0, "estimated": True}) == "↓ 10 o   ↑ 0 o (estimé)"
-    assert usage_text({}) == "↓ 0 o   ↑ 0 o"
+    assert usage_text({"downloaded": 1_200_000_000, "uploaded": 80_000_000}) == "1,2 Go reçus  ·  80 Mo envoyés"
+    assert usage_text({"downloaded": 10, "uploaded": 0, "estimated": True}) == "10 o reçus  ·  0 o envoyés (estimé)"
+    assert usage_text({}) == "0 o reçus  ·  0 o envoyés"
 
 
 @pytest.mark.parametrize(

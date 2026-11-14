@@ -41,7 +41,8 @@ $action = New-ScheduledTaskAction -Execute {_quote(executable)} -Argument {_quot
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `
-    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+    -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName {_quote(TASK_NAME)} -Action $action -Trigger $trigger -Principal $principal `
     -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName {_quote(TASK_NAME)}
@@ -66,6 +67,18 @@ def is_installed(runner: Runner = run_powershell) -> bool:
         return bool(run_json(script, runner).get("installed"))
     except PowerShellError:
         return False
+
+
+def start_service(runner: Runner = run_powershell) -> None:
+    """Relance le service déjà installé. Ne demande pas de droits : la tâche appartient à l'utilisateur."""
+    script = (
+        "try { Start-ScheduledTask -TaskName " + _quote(TASK_NAME) + " -ErrorAction Stop; "
+        "@{ ok = $true } | ConvertTo-Json -Compress } "
+        "catch { @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress }"
+    )
+    reply = run_json(script, runner)
+    if not reply.get("ok"):
+        raise PowerShellError(str(reply.get("error", "démarrage du service impossible")))
 
 
 def run_elevated(script: str, timeout: float = ELEVATION_TIMEOUT_SECONDS) -> None:

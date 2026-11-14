@@ -4,7 +4,7 @@ import json
 import time
 
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from wifimanager.app import MainWindow
 from wifimanager.controller import HotspotWorker
@@ -14,6 +14,7 @@ from wifimanager.ps import PowerShellError
 from wifimanager.service_client import ServiceUnavailable
 from wifimanager.settings import Settings, settings_file
 from wifimanager.watchdog import Watchdog, WatchdogConfig
+from wifimanager.widgets import Avatar, DeviceRow, ToggleSwitch
 
 PASSPHRASE = "k7mp-4nwx-q2ht"
 A = "aa:bb:cc:dd:ee:01"
@@ -266,7 +267,7 @@ def test_uninstall_shuts_the_service_down_then_removes_the_task(qapp, fake, serv
     assert any("Blocage désactivé" in m for m in seen["message"])
 
 
-# --- fenêtre ---------------------------------------------------------------------------------------
+# --- fenêtre -----------------------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -283,31 +284,51 @@ def state_with(*clients: Client, on: bool = True) -> HotspotState:
     )
 
 
-def cells(window, row: int = 0) -> list[str]:
-    return [window._table.item(row, c).text() for c in range(window._table.columnCount())]
+def trigger(row: DeviceRow, key: str) -> None:
+    row._actions[key].trigger()
 
 
-def test_window_without_service_shows_devices_and_asks_to_enable_blocking(window) -> None:
+def test_hero_shows_the_hotspot_state(window) -> None:
     window._on_state(state_with(Client(A, ("Redmi-13C",), "192.168.137.41")))
-    assert window._status.text() == "Hotspot allumé" and "1/8" in window._details.text()
-    assert cells(window) == ["Redmi-13C", "192.168.137.41", A, "—", "—", "Connecté"]
-    assert not window._install_button.isHidden() and window._uninstall_button.isHidden()
-    assert not window._pass_button.isEnabled() and not window._block_button.isEnabled()
-    assert "Active d'abord" in window._block_button.toolTip()
+    assert window._hero_pill.text() == "Allumé" and window._hero_ssid.text() == "JEMK_PC"
+    assert window._hero_details.text() == "Bande Auto  ·  1 appareil sur 8"
+    assert window._hotspot_switch.isChecked() and window._tile_devices.value.text() == "1/8"
+    window._on_state(state_with(on=False))
+    assert window._hero_pill.text() == "Éteint" and not window._hotspot_switch.isChecked()
 
 
-def test_window_with_service_shows_access_and_data(window) -> None:
+def test_unavailable_hotspot_disables_actions_and_says_why(window) -> None:
+    window._on_state(HotspotState(available=False, reason="Aucune connexion Internet à partager"))
+    assert window._hero_pill.text() == "Indisponible" and "Internet" in window._hero_details.text()
+    assert not window._hotspot_switch.isEnabled() and not window._password_button.isEnabled()
+
+
+def test_without_service_devices_have_no_access_column_and_blocking_is_offered(window) -> None:
     window._on_state(state_with(Client(A, ("Redmi-13C",), "192.168.137.41")))
-    window._on_service(service_status([device(), device(B, connected=False, names=[], ip="192.168.137.57", mode="blocked", blocked=True, uploaded=0, downloaded=5000)]))
-    assert window._table.rowCount() == 2  # aussi l'appareil parti, car il a une règle
-    assert cells(window, 0)[3:] == ["Autorisé", "↓ 1,2 Go   ↑ 80 Mo", "Connecté"]
-    assert cells(window, 1)[3:] == ["Bloqué", "↓ 5 Ko   ↑ 0 o", "Absent"]
-    assert not window._install_button.isVisible() and not window._uninstall_button.isHidden()
-    assert "Blocage actif" in window._service_label.text()
-    assert "↓ 1,2 Go" in window._usage_label.text() and "total 1,3 Go" in window._usage_label.text()
+    row = window._rows[A]
+    assert row.name() == "Redmi-13C" and "192.168.137.41" in row.subtitle() and A in row.subtitle()
+    assert row.data() == "" and row._pill.isHidden()
+    assert window._tile_blocking.value.text() == "Inactif" and window._tile_blocking.button.text() == "Activer…"
+    assert not window._pass_button.isEnabled() and not window._strict_switch.isEnabled()
+    assert not row.action_enabled("block") and row.action_enabled("rename")
+    assert "Active d'abord" in row._more.toolTip()
 
 
-def test_temporary_pending_and_expired_access_texts(window) -> None:
+def test_with_service_rows_show_access_and_data(window) -> None:
+    window._on_state(state_with(Client(A, ("Redmi-13C",), "192.168.137.41")))
+    window._on_service(
+        service_status([device(), device(B, connected=False, names=[], ip="192.168.137.57", mode="blocked", blocked=True, explicit=True, uploaded=0, downloaded=5000)])
+    )
+    assert list(window._rows) == [A, B]  # aussi l'appareil parti, car il a une règle
+    first, second = window._rows[A], window._rows[B]
+    assert first.access() == "Autorisé" and first.data() == "1,2 Go reçus  ·  80 Mo envoyés"
+    assert second.access() == "Bloqué" and second.data() == "5 Ko reçus  ·  0 o envoyés" and "absent" in second.subtitle()
+    assert second.name() == "Appareil ee:02"  # sans nom connu : les derniers chiffres de l'adresse MAC
+    assert window._tile_blocking.value.text() == "Actif" and window._tile_blocking.button.text() == "Désactiver"
+    assert window._tile_data.value.text() == "1,3 Go" and "reçus" in window._tile_data.caption.text()
+
+
+def test_temporary_pending_and_expired_texts(window) -> None:
     window._on_service(
         service_status(
             [
@@ -317,29 +338,32 @@ def test_temporary_pending_and_expired_access_texts(window) -> None:
             ]
         )
     )
-    assert [cells(window, r)[3] for r in range(3)] == ["Temporaire : 5 h 42 min restant", "En attente de ton accord", "Accès expiré"]
+    rows = list(window._rows.values())
+    assert [r.access() for r in rows] == ["Temporaire · 5 h 42 min", "En attente", "Accès expiré"]
+    assert rows[1].approve_visible() and not rows[0].approve_visible()
 
 
 def test_estimated_data_is_flagged(window) -> None:
     window._on_service(service_status([device(estimated=True)]))
-    assert cells(window)[4].endswith("(estimé)")
+    assert window._rows[A].data().endswith("(estimé)")
 
 
-def test_buttons_follow_the_selected_device(window) -> None:
+def test_menu_actions_follow_the_state_of_the_device(window) -> None:
     window._on_service(service_status([device(A), device(B, mode="blocked", blocked=True, explicit=True)]))
-    window._table.selectRow(0)
-    assert window._block_button.isEnabled() and not window._allow_button.isEnabled() and not window._forget_button.isEnabled()
-    window._table.selectRow(1)
-    assert not window._block_button.isEnabled() and window._allow_button.isEnabled() and window._forget_button.isEnabled()
+    free, blocked = window._rows[A], window._rows[B]
+    assert free.action_enabled("block") and not free.action_enabled("allow") and not free.action_enabled("forget")
+    assert not blocked.action_enabled("block") and blocked.action_enabled("allow") and blocked.action_enabled("forget")
+    assert free.action_enabled("temporary") and blocked.action_enabled("temporary")
 
 
-def test_block_and_allow_send_orders_for_the_selected_device(window) -> None:
-    window._on_service(service_status([device(A)]))
+def test_row_menu_sends_orders_for_that_device(window) -> None:
+    window._on_service(service_status([device(A), device(B, mode="pending", blocked=True, explicit=True)]))
     orders: list[dict] = []
     window.requestServiceAction.connect(orders.append)
-    window._table.selectRow(0)
-    window._block_button.click()
-    assert orders == [{"action": "block", "mac": A}]
+    trigger(window._rows[A], "block")
+    window._rows[B]._approve.click()  # le bouton « Autoriser » d'un appareil en attente
+    trigger(window._rows[B], "forget")
+    assert orders == [{"action": "block", "mac": A}, {"action": "allow", "mac": B}, {"action": "forget", "mac": B}]
 
 
 def test_temporary_access_sends_the_chosen_duration(window, monkeypatch) -> None:
@@ -348,44 +372,115 @@ def test_temporary_access_sends_the_chosen_duration(window, monkeypatch) -> None
     window.requestServiceAction.connect(orders.append)
     monkeypatch.setattr(DurationDialog, "exec", lambda self: 1)
     monkeypatch.setattr(DurationDialog, "seconds", lambda self: 12 * 3600)
-    window._table.selectRow(0)
-    window._temporary_button.click()
+    trigger(window._rows[A], "temporary")
     assert orders == [{"action": "allow_for", "mac": A, "seconds": 43200}]
 
 
-def test_strict_checkbox_sends_the_mode_but_display_updates_do_not(window) -> None:
+def test_renaming_is_saved_and_wins_over_the_host_name(window, monkeypatch) -> None:
+    window._on_state(state_with(Client(A, ("Redmi-13C",), "192.168.137.41")))
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Téléphone de Marie", True)))
+    trigger(window._rows[A], "rename")
+    assert Settings.load().device_name(A) == "Téléphone de Marie"
+    assert window._rows[A].name() == "Téléphone de Marie" and window._rows[A].initials() == "TM"
+
+
+def test_renaming_with_an_empty_name_erases_it(window, monkeypatch) -> None:
+    window._settings.rename_device(A, "Marie")
+    window._on_state(state_with(Client(A, ("Redmi-13C",), None)))
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", True)))
+    trigger(window._rows[A], "rename")
+    assert window._rows[A].name() == "Redmi-13C"
+
+
+def test_cancelling_a_rename_changes_nothing(window, monkeypatch) -> None:
+    window._on_state(state_with(Client(A, ("Redmi-13C",), None)))
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Autre", False)))
+    trigger(window._rows[A], "rename")
+    assert window._rows[A].name() == "Redmi-13C" and not settings_file().exists()
+
+
+def test_refreshing_does_not_write_settings_or_recreate_rows(window) -> None:
+    window._on_state(state_with(Client(A, ("Redmi-13C",), None)))
+    row = window._rows[A]
+    window._on_state(state_with(Client(A, ("Redmi-13C",), None)))
+    assert window._rows[A] is row and not settings_file().exists()  # la même ligne est réutilisée, rien n'est écrit
+
+
+def test_rows_are_added_removed_and_reordered(window) -> None:
+    window._on_service(service_status([device(A), device(B)]))
+    assert window._devices_layout.indexOf(window._rows[A]) == 0 and window._devices_layout.indexOf(window._rows[B]) == 1
+    window._on_service(service_status([device(B), device(A)]))
+    assert window._devices_layout.indexOf(window._rows[B]) == 0
+    window._on_service(service_status([device(B)]))
+    assert list(window._rows) == [B] and window._devices_layout.count() == 1
+
+
+def test_empty_state_message(window) -> None:
+    window._on_state(state_with())
+    assert not window._empty.isHidden()
+    window._on_state(state_with(Client(A, ("Redmi-13C",), None)))
+    assert window._empty.isHidden()
+
+
+def test_strict_switch_sends_the_mode_but_display_updates_do_not(window) -> None:
     orders: list[dict] = []
     window.requestServiceAction.connect(orders.append)
     window._on_service(service_status(default_mode="strict"))
-    assert window._strict.isChecked() and orders == []  # un simple affichage ne renvoie aucun ordre
-    window._strict.setChecked(False)
+    assert window._strict_switch.isChecked() and orders == []  # un simple affichage ne renvoie aucun ordre
+    window._strict_switch.click()
     assert orders == [{"action": "set_default_mode", "mode": "open"}]
 
 
-def test_renaming_a_device_is_saved_and_wins_over_the_host_name(window) -> None:
-    window._on_state(state_with(Client(A, ("Redmi-13C",), "192.168.137.41")))
-    window._table.item(0, 0).setText("Téléphone de Marie")
-    assert Settings.load().device_name(A) == "Téléphone de Marie"
-    window._on_state(state_with(Client(A, ("Redmi-13C",), "192.168.137.41")))
-    assert cells(window)[0] == "Téléphone de Marie"
+def test_blocking_button_installs_then_uninstalls_after_confirmation(window, monkeypatch) -> None:
+    requests: list[str] = []
+    window.requestInstall.connect(lambda: requests.append("install"))
+    window.requestUninstall.connect(lambda: requests.append("uninstall"))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    window._tile_blocking.button.click()
+    window._on_service(service_status())
+    window._tile_blocking.button.click()
+    assert requests == ["install", "uninstall"]
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    window._tile_blocking.button.click()
+    assert requests == ["install", "uninstall"]  # refusé : rien n'est lancé
 
 
-def test_refreshing_does_not_write_settings(window) -> None:
-    window._on_state(state_with(Client(A, ("Redmi-13C",), None)))
-    assert not settings_file().exists()
+def test_hotspot_switch_starts_directly_and_asks_before_stopping(window, monkeypatch) -> None:
+    requests: list[str] = []
+    window.requestStart.connect(lambda: requests.append("start"))
+    window.requestStop.connect(lambda: requests.append("stop"))
+    window._on_state(state_with(on=False))
+    window._hotspot_switch.click()
+    assert requests == ["start"]
+
+    window._on_state(state_with(on=True))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    window._hotspot_switch.click()
+    assert requests == ["start"] and window._hotspot_switch.isChecked()  # refusé : l'interrupteur revient sur « allumé »
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    window._hotspot_switch.click()
+    assert requests == ["start", "stop"]
 
 
-def test_selection_survives_a_refresh(window) -> None:
-    window._on_service(service_status([device(A), device(B)]))
-    window._table.selectRow(1)
-    window._on_service(service_status([device(A), device(B)]))
-    assert window._selected_mac() == B
+def test_keep_alive_switch_is_saved_and_forwarded(window) -> None:
+    forwarded: list[bool] = []
+    window.requestAutoRestart.connect(forwarded.append)
+    window._keep_switch.click()
+    assert forwarded == [True] and Settings.load().auto_restart is True
+    window._keep_switch.click()
+    assert forwarded == [True, False] and Settings.load().auto_restart is False
+
+
+def test_keep_alive_reflects_saved_setting(qapp, fake, service) -> None:
+    win = MainWindow(Settings(auto_restart=True), make_worker(fake, service))
+    assert win._keep_switch.isChecked()
+    win.close()
 
 
 def test_first_events_are_not_announced_but_later_ones_are(window) -> None:
     old = [{"seq": 1, "kind": "new_device", "mac": A, "detail": ""}]
     window._on_service(service_status(events=old))
-    assert window.statusBar().currentMessage() != "Nouvel appareil connecté : Redmi-13C"  # ancien : on ne l'annonce pas
+    assert window.statusBar().currentMessage() != "Nouvel appareil connecté : Redmi-13C"
     window._on_service(service_status(events=old + [{"seq": 2, "kind": "access_expired", "mac": A, "detail": ""}]))
     assert window.statusBar().currentMessage() == "Accès expiré : Redmi-13C est maintenant bloqué"
 
@@ -393,7 +488,9 @@ def test_first_events_are_not_announced_but_later_ones_are(window) -> None:
 def test_service_restart_resets_the_event_counter_without_replaying(window) -> None:
     window._on_service(service_status(events=[{"seq": 40, "kind": "new_device", "mac": A, "detail": ""}]))
     window._on_service(service_status(events=[{"seq": 1, "kind": "new_device", "mac": A, "detail": ""}]))  # redémarré
-    window._on_service(service_status(events=[{"seq": 1, "kind": "new_device", "mac": A, "detail": ""}, {"seq": 2, "kind": "pass_expired", "mac": "", "detail": "x"}]))
+    window._on_service(
+        service_status(events=[{"seq": 1, "kind": "new_device", "mac": A, "detail": ""}, {"seq": 2, "kind": "pass_expired", "mac": "", "detail": "x"}])
+    )
     assert window.statusBar().currentMessage() == "Un pass invité a expiré sans être utilisé"
 
 
@@ -406,39 +503,10 @@ def test_qr_button_only_when_the_password_is_known(window) -> None:
 
 
 def test_credentials_applied_stores_the_password_and_shows_the_qr(window, monkeypatch) -> None:
-    shown: list[tuple] = []
+    shown: list[str] = []
     monkeypatch.setattr(ShareDialog, "exec", lambda self: shown.append(self.windowTitle()) or 0)
     window._on_credentials_applied("JEMK_PC", PASSPHRASE)
     assert window._settings.wifi_password() == PASSPHRASE and shown == ["Connecter un appareil"]
-
-
-def test_toggle_asks_before_stopping_and_starts_directly(window, monkeypatch) -> None:
-    requests: list[str] = []
-    window.requestStart.connect(lambda: requests.append("start"))
-    window.requestStop.connect(lambda: requests.append("stop"))
-    window._on_state(state_with(on=False))
-    window._toggle.click()
-    assert requests == ["start"]
-    window._on_state(state_with(on=True))
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
-    window._toggle.click()
-    assert requests == ["start"]
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
-    window._toggle.click()
-    assert requests == ["start", "stop"]
-
-
-def test_unavailable_hotspot_disables_actions_and_says_why(window) -> None:
-    window._on_state(HotspotState(available=False, reason="Aucune connexion Internet à partager"))
-    assert "indisponible" in window._status.text() and "Internet" in window._details.text()
-    assert not window._toggle.isEnabled() and not window._password_button.isEnabled()
-
-
-def test_auto_restart_checkbox_is_saved_and_forwarded(window) -> None:
-    forwarded: list[bool] = []
-    window.requestAutoRestart.connect(forwarded.append)
-    window._auto_restart.setChecked(True)
-    assert forwarded == [True] and Settings.load().auto_restart is True
 
 
 # --- pass invité ---------------------------------------------------------------------------------
@@ -495,7 +563,27 @@ def test_pass_dialog_expires_when_the_window_closes(qapp) -> None:
     assert dialog._finished and "expiré" in dialog._state.text()
 
 
-# --- dialogues ----------------------------------------------------------------------------------
+# --- composants et dialogues ---------------------------------------------------------------------
+
+
+def test_toggle_switch_clicks_emit_but_silent_updates_do_not(qapp) -> None:
+    switch = ToggleSwitch()
+    clicks: list[bool] = []
+    switch.clicked.connect(lambda checked=False: clicks.append(checked))
+    switch.click()
+    assert clicks == [True] and switch.isChecked()
+    switch.set_checked_silently(False)
+    assert clicks == [True] and not switch.isChecked() and switch.position == 0.0
+
+
+@pytest.mark.parametrize(
+    "name, initials",
+    [("Mon Redmi", "MR"), ("iPhone-de-Marie", "IM"), ("Redmi-13C", "R1"), ("Tablette", "TA"), ("a", "A"), (None, "?"), ("", "?")],
+)
+def test_avatar_initials(qapp, name, initials) -> None:
+    avatar = Avatar()
+    avatar.set_identity(name, A)
+    assert avatar.initials == initials
 
 
 def test_duration_dialog_presets_and_custom(qapp) -> None:

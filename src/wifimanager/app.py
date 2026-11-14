@@ -1,4 +1,4 @@
-"""Interface Qt : hotspot, appareils, blocage, accès temporaires, pass invités avec QR code, données consommées."""
+"""Interface Qt moderne : hotspot, appareils, blocage, accès temporaires, pass invités, données, maintien allumé."""
 
 from __future__ import annotations
 
@@ -7,30 +7,27 @@ from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDialog,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QScrollArea,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from wifimanager import theme
 from wifimanager.controller import HotspotWorker
 from wifimanager.dialogs import DurationDialog, PassDialog, PasswordDialog, ShareDialog
-from wifimanager.formatting import access_text, duration_label, usage_text
+from wifimanager.formatting import duration_label
 from wifimanager.models import HotspotState
 from wifimanager.neighbors import run_arp
 from wifimanager.passwords import validate_passphrase
@@ -38,12 +35,27 @@ from wifimanager.psession import PowerShellSession
 from wifimanager.settings import Settings
 from wifimanager.usage import format_bytes
 from wifimanager.watchdog import Watchdog, WatchdogConfig
-
-COLORS = {"on": "#1b9e4b", "off": "#8a8f98", "warn": "#d98e04", "bad": "#c0392b"}
-NEEDS_SERVICE = "Active d'abord le blocage (service administrateur)"
-HEADERS = ["Appareil", "Adresse IP", "Adresse MAC", "Accès", "Données", "Statut"]
+from wifimanager.widgets import (
+    Card,
+    DeviceRow,
+    Pill,
+    StatTile,
+    ToggleSwitch,
+    muted,
+    set_pill,
+)
 
 __all__ = ["MainWindow", "PasswordDialog", "PassDialog", "ShareDialog", "main"]
+
+KEEP_ALIVE_HELP = (
+    "Relance le hotspot s'il s'éteint, et le service de blocage s'il s'arrête. Un arrêt fait avec l'interrupteur de "
+    "cette fenêtre n'est jamais défait. Si Windows éteint le hotspot faute d'appareil connecté, désactive aussi "
+    "« Économie d'énergie » dans Paramètres › Réseau › Point d'accès mobile."
+)
+STRICT_HELP = (
+    "Un nouvel appareil est bloqué tant que tu ne l'as pas autorisé, sauf s'il se présente avec un pass invité. "
+    "Les appareils déjà connus ne sont pas coupés."
+)
 
 
 class MainWindow(QMainWindow):
@@ -60,36 +72,40 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: Settings, worker: HotspotWorker) -> None:
         super().__init__()
         self.setWindowTitle("WifiManager")
-        self.resize(980, 720)
+        self.resize(940, 800)
+        self.setMinimumSize(780, 640)
         self._settings = settings
         self._state: HotspotState | None = None
         self._service: dict[str, Any] | None = None
-        self._rows: list[dict[str, Any]] = []
+        self._rows: dict[str, DeviceRow] = {}
         self._last_event = 0
         self._events_primed = False
         self._pass_password: str | None = None
 
-        self._build_header()
-        self._build_service_bar()
-        self._build_devices()
-        self._build_usage()
+        page = QWidget()
+        page.setObjectName("page")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+        layout.addLayout(self._build_title())
+        layout.addWidget(self._build_hero())
+        layout.addLayout(self._build_tiles())
+        layout.addWidget(self._build_keep_alive())
+        layout.addLayout(self._build_devices_header())
+        self._devices_layout = QVBoxLayout()
+        self._devices_layout.setSpacing(10)
+        layout.addLayout(self._devices_layout)
+        self._empty = muted(QLabel("Aucun appareil connecté pour le moment."))
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setContentsMargins(0, 24, 0, 24)
+        layout.addWidget(self._empty)
+        layout.addStretch()
 
-        self._auto_restart = QCheckBox("Relancer automatiquement le hotspot s'il s'éteint")
-        self._auto_restart.setChecked(settings.auto_restart)
-        self._auto_restart.setToolTip(
-            "Si tu éteins le hotspot depuis Windows, il sera relancé. Un arrêt fait avec le bouton de cette fenêtre "
-            "n'est jamais défait."
-        )
-        self._auto_restart.toggled.connect(self._on_auto_restart)
-
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.addWidget(self._card)
-        layout.addWidget(self._service_card)
-        layout.addWidget(self._devices_box, stretch=1)
-        layout.addWidget(self._usage_card)
-        layout.addWidget(self._auto_restart)
-        self.setCentralWidget(central)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        self.setCentralWidget(scroll)
         self.statusBar().showMessage("Prêt")
 
         self._connect_worker(worker)
@@ -97,98 +113,124 @@ class MainWindow(QMainWindow):
 
     # --- construction -------------------------------------------------------------------------
 
-    def _build_header(self) -> None:
-        self._dot = QLabel("●")
-        self._status = QLabel("Lecture en cours…")
-        self._status.setStyleSheet("font-size: 16px; font-weight: 600;")
-        self._details = QLabel("")
-        self._details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._toggle = QPushButton("Démarrer le hotspot")
-        self._toggle.clicked.connect(self._on_toggle)
-        self._password_button = QPushButton("Changer le mot de passe…")
+    def _build_title(self) -> QHBoxLayout:
+        title = QLabel("WifiManager")
+        title.setObjectName("title")
+        subtitle = muted(QLabel("Pilote le hotspot de ce PC : appareils, accès et données."))
+        text = QVBoxLayout()
+        text.setSpacing(0)
+        text.addWidget(title)
+        text.addWidget(subtitle)
+        self._refresh_button = QToolButton()
+        self._refresh_button.setText("⟳")
+        self._refresh_button.setToolTip("Actualiser")
+        self._refresh_button.clicked.connect(self.requestPoll)
+        row = QHBoxLayout()
+        row.addLayout(text, stretch=1)
+        row.addWidget(self._refresh_button, alignment=Qt.AlignmentFlag.AlignTop)
+        return row
+
+    def _build_hero(self) -> Card:
+        self._hero_pill = Pill()
+        self._hero_ssid = QLabel("—")
+        self._hero_ssid.setObjectName("ssid")
+        self._hero_ssid.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._hero_details = muted(QLabel(""))
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        left.addWidget(self._hero_pill, alignment=Qt.AlignmentFlag.AlignLeft)
+        left.addWidget(self._hero_ssid)
+        left.addWidget(self._hero_details)
+
+        self._hotspot_switch = ToggleSwitch()
+        self._hotspot_switch.setAccessibleName("Hotspot allumé")
+        self._hotspot_switch.clicked.connect(self._on_hotspot_clicked)
+        self._hotspot_caption = QLabel("Hotspot")
+        switch_row = QHBoxLayout()
+        switch_row.setSpacing(10)
+        switch_row.addStretch()
+        switch_row.addWidget(self._hotspot_caption)
+        switch_row.addWidget(self._hotspot_switch)
+
+        self._password_button = QPushButton("Mot de passe…")
         self._password_button.clicked.connect(self._on_password)
         self._qr_button = QPushButton("QR code")
         self._qr_button.setToolTip("Affiche le QR code de connexion avec le mot de passe actuel")
         self._qr_button.clicked.connect(self._on_show_qr)
-        self._refresh_button = QPushButton("Actualiser")
-        self._refresh_button.clicked.connect(self.requestPoll)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self._qr_button)
+        buttons.addWidget(self._password_button)
+        right = QVBoxLayout()
+        right.setSpacing(12)
+        right.addLayout(switch_row)
+        right.addLayout(buttons)
 
-        header = QHBoxLayout()
-        header.addWidget(self._dot)
-        header.addWidget(self._status)
-        header.addStretch()
-        for button in (self._refresh_button, self._toggle, self._password_button, self._qr_button):
-            header.addWidget(button)
+        card = Card()
+        row = QHBoxLayout(card)
+        row.setContentsMargins(22, 20, 22, 20)
+        row.addLayout(left, stretch=1)
+        row.addLayout(right)
+        return card
 
-        self._card = QFrame()
-        self._card.setFrameShape(QFrame.Shape.StyledPanel)
-        card_layout = QVBoxLayout(self._card)
-        card_layout.addLayout(header)
-        card_layout.addWidget(self._details)
+    def _build_tiles(self) -> QHBoxLayout:
+        self._tile_devices = StatTile("Appareils")
+        self._tile_data = StatTile("Données")
+        self._tile_blocking = StatTile("Blocage")
+        self._tile_blocking.button.clicked.connect(self._on_blocking_clicked)
+        self._reset_usage = QPushButton("Remettre à zéro")
+        self._reset_usage.setProperty("small", True)
+        self._reset_usage.clicked.connect(self._on_reset_usage)
+        self._tile_data.layout().insertWidget(self._tile_data.layout().count() - 1, self._reset_usage, alignment=Qt.AlignmentFlag.AlignLeft)
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        for tile in (self._tile_devices, self._tile_data, self._tile_blocking):
+            row.addWidget(tile, stretch=1)
+        return row
 
-    def _build_service_bar(self) -> None:
-        self._service_label = QLabel("")
-        self._service_label.setWordWrap(True)
-        self._install_button = QPushButton("Activer le blocage…")
-        self._install_button.clicked.connect(self._on_install)
-        self._uninstall_button = QPushButton("Désactiver le blocage")
-        self._uninstall_button.clicked.connect(self._on_uninstall)
+    def _build_keep_alive(self) -> Card:
+        title = QLabel("Maintenir allumé")
+        title.setObjectName("h2")
+        help_text = muted(QLabel(KEEP_ALIVE_HELP))
+        help_text.setWordWrap(True)
+        self._keep_switch = ToggleSwitch()
+        self._keep_switch.setAccessibleName("Maintenir allumé")
+        self._keep_switch.set_checked_silently(self._settings.auto_restart)
+        self._keep_switch.clicked.connect(self._on_keep_alive)
+        text = QVBoxLayout()
+        text.setSpacing(3)
+        text.addWidget(title)
+        text.addWidget(help_text)
+        card = Card()
+        row = QHBoxLayout(card)
+        row.setContentsMargins(22, 16, 22, 16)
+        row.setSpacing(18)
+        row.addLayout(text, stretch=1)
+        row.addWidget(self._keep_switch, alignment=Qt.AlignmentFlag.AlignVCenter)
+        return card
+
+    def _build_devices_header(self) -> QHBoxLayout:
+        heading = QLabel("Appareils")
+        heading.setObjectName("h2")
+        strict_label = QLabel("Mode strict")
+        strict_label.setToolTip(STRICT_HELP)
+        self._strict_switch = ToggleSwitch()
+        self._strict_switch.setToolTip(STRICT_HELP)
+        self._strict_switch.setAccessibleName("Mode strict")
+        self._strict_switch.clicked.connect(self._on_strict)
         self._pass_button = QPushButton("Pass invité…")
+        self._pass_button.setProperty("primary", True)
         self._pass_button.setToolTip("Crée un QR code d'accès limité dans le temps pour un invité")
         self._pass_button.clicked.connect(self._on_new_pass)
-        self._strict = QCheckBox("Mode strict : retenir les nouveaux appareils jusqu'à mon accord")
-        self._strict.setToolTip(
-            "Un nouvel appareil est bloqué tant que tu ne l'as pas autorisé, sauf s'il se présente avec un pass invité."
-        )
-        self._strict.toggled.connect(self._on_strict)
-
-        top = QHBoxLayout()
-        top.addWidget(self._service_label, stretch=1)
-        for button in (self._pass_button, self._install_button, self._uninstall_button):
-            top.addWidget(button)
-        self._service_card = QFrame()
-        self._service_card.setFrameShape(QFrame.Shape.StyledPanel)
-        layout = QVBoxLayout(self._service_card)
-        layout.addLayout(top)
-        layout.addWidget(self._strict)
-
-    def _build_devices(self) -> None:
-        self._table = QTableWidget(0, len(HEADERS))
-        self._table.setHorizontalHeaderLabels(HEADERS)
-        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self._table.itemChanged.connect(self._on_item_changed)
-        self._table.itemSelectionChanged.connect(self._update_device_buttons)
-
-        self._block_button = QPushButton("Bloquer")
-        self._allow_button = QPushButton("Autoriser")
-        self._temporary_button = QPushButton("Accès temporaire…")
-        self._forget_button = QPushButton("Retirer la règle")
-        self._block_button.clicked.connect(lambda: self._send_for_selected("block"))
-        self._allow_button.clicked.connect(lambda: self._send_for_selected("allow"))
-        self._temporary_button.clicked.connect(self._on_temporary)
-        self._forget_button.clicked.connect(lambda: self._send_for_selected("forget"))
-
-        buttons = QHBoxLayout()
-        for button in (self._block_button, self._allow_button, self._temporary_button, self._forget_button):
-            buttons.addWidget(button)
-        buttons.addStretch()
-        self._devices_box = QGroupBox("Appareils (double-clic sur un nom pour le changer)")
-        layout = QVBoxLayout(self._devices_box)
-        layout.addWidget(self._table)
-        layout.addLayout(buttons)
-
-    def _build_usage(self) -> None:
-        self._usage_label = QLabel("")
-        self._reset_usage = QPushButton("Remettre à zéro")
-        self._reset_usage.clicked.connect(self._on_reset_usage)
         row = QHBoxLayout()
-        row.addWidget(self._usage_label, stretch=1)
-        row.addWidget(self._reset_usage)
-        self._usage_card = QFrame()
-        self._usage_card.setFrameShape(QFrame.Shape.StyledPanel)
-        QVBoxLayout(self._usage_card).addLayout(row)
+        row.setSpacing(10)
+        row.addWidget(heading)
+        row.addStretch()
+        row.addWidget(strict_label)
+        row.addWidget(self._strict_switch)
+        row.addSpacing(10)
+        row.addWidget(self._pass_button)
+        return row
 
     def _connect_worker(self, worker: HotspotWorker) -> None:
         self.requestPoll.connect(worker.poll)
@@ -260,11 +302,12 @@ class MainWindow(QMainWindow):
 
     def _on_failure(self, text: str) -> None:
         self.statusBar().showMessage(text, 15_000)
-        self._dot.setStyleSheet(f"color: {COLORS['warn']}; font-size: 20px;")
+        if self._state is not None and self._state.available:
+            set_pill(self._hero_pill, "Attention", "warning")
 
     def _on_busy(self, busy: bool) -> None:
-        for button in (self._toggle, self._password_button, self._refresh_button, self._install_button, self._uninstall_button):
-            button.setEnabled(not busy)
+        for widget in (self._hotspot_switch, self._password_button, self._refresh_button, self._tile_blocking.button):
+            widget.setEnabled(not busy)
         if not busy:
             self._render()
 
@@ -280,62 +323,88 @@ class MainWindow(QMainWindow):
     # --- affichage ------------------------------------------------------------------------------
 
     def _render(self) -> None:
-        self._render_header()
-        self._render_service()
-        self._rows = self._build_rows()
-        self._fill_table()
-        self._render_usage()
-        self._update_device_buttons()
+        self._render_hero()
+        self._render_tiles()
+        self._render_strict()
+        self._render_devices()
 
-    def _render_header(self) -> None:
+    def _render_hero(self) -> None:
         state = self._state
         self._qr_button.setVisible(self._settings.wifi_password() is not None)
         if state is None:
-            self._paint("off", "Lecture en cours…", "")
-            self._toggle.setEnabled(False)
+            set_pill(self._hero_pill, "Lecture en cours…", "neutral")
+            self._hero_ssid.setText("—")
+            self._hero_details.setText("")
+            self._hotspot_switch.set_checked_silently(False)
+            self._hotspot_switch.setEnabled(False)
             self._password_button.setEnabled(False)
         elif not state.available:
-            self._paint("warn", "Hotspot indisponible", state.reason)
-            self._toggle.setEnabled(False)
+            set_pill(self._hero_pill, "Indisponible", "warning")
+            self._hero_ssid.setText("Hotspot indisponible")
+            self._hero_details.setText(state.reason)
+            self._hotspot_switch.set_checked_silently(False)
+            self._hotspot_switch.setEnabled(False)
             self._password_button.setEnabled(False)
         else:
-            kind, title = ("on", "Hotspot allumé") if state.is_on else ("off", "Hotspot éteint")
-            parts = [f"Réseau : {state.ssid}", f"Bande : {state.band}", f"Appareils : {state.client_count}/{state.max_clients}"]
-            self._paint(kind, title, "   |   ".join(parts))
-            self._toggle.setText("Arrêter le hotspot" if state.is_on else "Démarrer le hotspot")
-            self._toggle.setEnabled(True)
+            on = state.is_on
+            set_pill(self._hero_pill, "Allumé" if on else "Éteint", "success" if on else "neutral")
+            self._hero_ssid.setText(state.ssid or "—")
+            plural = "appareil" if state.client_count <= 1 else "appareils"
+            self._hero_details.setText(f"Bande {state.band}  ·  {state.client_count} {plural} sur {state.max_clients}")
+            self._hotspot_switch.set_checked_silently(on)
+            self._hotspot_switch.setEnabled(True)
             self._password_button.setEnabled(True)
 
-    def _paint(self, kind: str, title: str, details: str) -> None:
-        self._dot.setStyleSheet(f"color: {COLORS[kind]}; font-size: 20px;")
-        self._status.setText(title)
-        self._details.setText(details)
-
-    def _render_service(self) -> None:
-        active = self._service is not None
-        self._install_button.setVisible(not active)
-        self._uninstall_button.setVisible(active)
-        self._pass_button.setEnabled(active)
-        self._strict.setEnabled(active)
-        if active:
-            error = self._service["service"].get("error")
-            text = "Blocage actif : le service applique les règles, même fenêtre fermée."
-            if error:
-                text += f"   ⚠ {error}"
-            self._service_label.setText(text)
-            self._strict.blockSignals(True)  # l'affichage ne doit pas passer pour un clic de l'utilisateur
-            self._strict.setChecked(self._service.get("default_mode") == "strict")
-            self._strict.blockSignals(False)
+    def _render_tiles(self) -> None:
+        state = self._state
+        if state is not None and state.available:
+            self._tile_devices.value.setText(f"{state.client_count}/{state.max_clients}")
+            self._tile_devices.caption.setText("connecté" if state.client_count <= 1 else "connectés")
         else:
-            self._service_label.setText(
-                "Blocage désactivé : active-le pour bloquer des appareils, donner des accès de 6/12/24 h et mesurer les données."
-            )
-            self._strict.blockSignals(True)
-            self._strict.setChecked(False)
-            self._strict.blockSignals(False)
+            self._tile_devices.value.setText("—")
+            self._tile_devices.caption.setText("")
 
-    def _build_rows(self) -> list[dict[str, Any]]:
-        """Lignes du tableau : le service connaît aussi les appareils partis ; sans lui, seulement ceux qui sont connectés."""
+        service = self._service
+        self._reset_usage.setVisible(service is not None)
+        if service is None:
+            self._tile_data.value.setText("—")
+            self._tile_data.caption.setText("Mesure disponible quand le blocage est actif.")
+            self._tile_blocking.value.setText("Inactif")
+            self._tile_blocking.caption.setText("Active-le pour bloquer des appareils, limiter les accès dans le temps et mesurer les données.")
+            self._tile_blocking.button.setText("Activer…")
+            self._tile_blocking.button.setProperty("primary", True)
+        else:
+            usage = service["usage"]
+            total = usage["downloaded"] + usage["uploaded"]
+            since = datetime.fromtimestamp(usage["since"]).strftime("%d/%m %H:%M")
+            self._tile_data.value.setText(format_bytes(total))
+            caption = (
+                f"{format_bytes(usage['downloaded'])} reçus  ·  {format_bytes(usage['uploaded'])} envoyés\n"
+                f"depuis le {since}"
+            )
+            if usage.get("unattributed"):
+                caption += f"\n{format_bytes(usage['unattributed'])} non attribués"
+            self._tile_data.caption.setText(caption)
+            error = service["service"].get("error")
+            self._tile_blocking.value.setText("Actif")
+            self._tile_blocking.caption.setText(
+                (f"⚠ {error}" if error else "Les règles s'appliquent même fenêtre fermée.")
+            )
+            self._tile_blocking.button.setText("Désactiver")
+            self._tile_blocking.button.setProperty("primary", False)
+        self._tile_blocking.button.show()
+        button = self._tile_blocking.button
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+    def _render_strict(self) -> None:
+        active = self._service is not None
+        self._strict_switch.setEnabled(active)
+        self._pass_button.setEnabled(active)
+        self._strict_switch.set_checked_silently(active and self._service.get("default_mode") == "strict")
+
+    def _device_rows(self) -> list[dict[str, Any]]:
+        """Appareils à montrer : le service connaît aussi ceux qui sont partis ; sans lui, seulement les connectés."""
         if self._service is not None:
             return list(self._service["devices"])
         clients = self._state.clients if self._state is not None and self._state.available else ()
@@ -344,90 +413,37 @@ class MainWindow(QMainWindow):
             for c in clients
         ]
 
-    def _fill_table(self) -> None:
-        selected = self._selected_mac()
-        self._table.blockSignals(True)  # le remplissage ne doit pas passer pour un renommage de l'utilisateur
-        self._table.setRowCount(len(self._rows))
-        for row, device in enumerate(self._rows):
+    def _render_devices(self) -> None:
+        devices = self._device_rows()
+        wanted = [d["mac"] for d in devices]
+        for mac in [m for m in self._rows if m not in wanted]:
+            widget = self._rows.pop(mac)
+            self._devices_layout.removeWidget(widget)
+            widget.deleteLater()
+        for index, device in enumerate(devices):
             mac = device["mac"]
-            name = QTableWidgetItem(
-                self._settings.device_name(mac) or (device["names"][0] if device.get("names") else mac)
-            )
-            name.setData(Qt.ItemDataRole.UserRole, mac)
-            name.setFlags(name.flags() | Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(row, 0, name)
-            access = access_text(device) if device.get("mode") else "—"
-            data = usage_text(device) if self._service is not None else "—"
-            status = "Connecté" if device.get("connected") else "Absent"
-            for column, text in enumerate((device.get("ip") or "—", mac, access, data, status), start=1):
-                item = QTableWidgetItem(text)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self._table.setItem(row, column, item)
-            self._tint_row(row, device)
-        self._table.blockSignals(False)
-        if selected is not None:
-            for row, device in enumerate(self._rows):
-                if device["mac"] == selected:
-                    self._table.selectRow(row)
-
-    def _tint_row(self, row: int, device: dict[str, Any]) -> None:
-        mode = device.get("mode")
-        color = {"blocked": COLORS["bad"], "pending": COLORS["warn"]}.get(mode or "")
-        if color is None and not device.get("connected"):
-            color = COLORS["off"]
-        if color:
-            for column in range(self._table.columnCount()):
-                item = self._table.item(row, column)
-                if item is not None:
-                    item.setForeground(QBrush(QColor(color)))
-
-    def _render_usage(self) -> None:
-        self._reset_usage.setEnabled(self._service is not None)
-        if self._service is None:
-            self._usage_label.setText("Données consommées : disponibles quand le blocage est actif.")
-            return
-        usage = self._service["usage"]
-        since = datetime.fromtimestamp(usage["since"]).strftime("%d/%m %H:%M")
-        text = (
-            f"Données du hotspot depuis le {since} : ↓ {format_bytes(usage['downloaded'])}   ↑ {format_bytes(usage['uploaded'])}"
-            f"   (total {format_bytes(usage['downloaded'] + usage['uploaded'])})"
-        )
-        if usage.get("unattributed"):
-            text += f"   dont {format_bytes(usage['unattributed'])} non attribués"
-        self._usage_label.setText(text + "\nLe total est exact. Par appareil : exact s'il est seul, estimé s'ils sont plusieurs.")
-
-    def _update_device_buttons(self) -> None:
-        device = self._selected_device()
-        active = self._service is not None and device is not None
-        mode = device.get("mode") if device else None
-        self._block_button.setEnabled(active and mode not in ("blocked",))
-        self._allow_button.setEnabled(active and mode in ("blocked", "pending", "temporary"))
-        self._temporary_button.setEnabled(active)
-        self._forget_button.setEnabled(active and device is not None and device.get("explicit") is True)
-        tooltip = "" if self._service is not None else NEEDS_SERVICE
-        for button in (self._block_button, self._allow_button, self._temporary_button, self._forget_button):
-            button.setToolTip(tooltip)
-
-    # --- sélection ---------------------------------------------------------------------------------
-
-    def _selected_mac(self) -> str | None:
-        row = self._table.currentRow()
-        item = self._table.item(row, 0) if row >= 0 else None
-        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
-
-    def _selected_device(self) -> dict[str, Any] | None:
-        mac = self._selected_mac()
-        return next((d for d in self._rows if d["mac"] == mac), None)
+            widget = self._rows.get(mac)
+            if widget is None:
+                widget = DeviceRow(mac)
+                widget.actionRequested.connect(self._on_row_action)
+                self._rows[mac] = widget
+            widget.update_from(device, self._settings.device_name(mac), self._service is not None)
+            if self._devices_layout.indexOf(widget) != index:
+                self._devices_layout.removeWidget(widget)
+                self._devices_layout.insertWidget(index, widget)
+        self._empty.setVisible(not devices)
 
     # --- actions de l'utilisateur ------------------------------------------------------------------------
 
-    def _on_toggle(self) -> None:
-        if self._state is not None and self._state.is_on:
-            answer = QMessageBox.question(self, "WifiManager", "Arrêter le hotspot ? Tous les appareils seront déconnectés.")
-            if answer == QMessageBox.StandardButton.Yes:
-                self.requestStop.emit()
-        else:
+    def _on_hotspot_clicked(self, checked: bool) -> None:
+        if checked:
             self.requestStart.emit()
+            return
+        answer = QMessageBox.question(self, "WifiManager", "Arrêter le hotspot ? Tous les appareils seront déconnectés.")
+        if answer == QMessageBox.StandardButton.Yes:
+            self.requestStop.emit()
+        else:
+            self._hotspot_switch.set_checked_silently(True)  # refusé : l'interrupteur revient sur « allumé »
 
     def _on_password(self) -> None:
         ssid = self._state.ssid if self._state is not None else ""
@@ -440,33 +456,31 @@ class MainWindow(QMainWindow):
         if password is not None and self._state is not None:
             ShareDialog(self, self._state.ssid, password).exec()
 
-    def _on_auto_restart(self, enabled: bool) -> None:
+    def _on_keep_alive(self, enabled: bool) -> None:
         self._settings.auto_restart = enabled
         self._settings.save()
         self.requestAutoRestart.emit(enabled)
 
-    def _on_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() != 0:
-            return
-        mac = item.data(Qt.ItemDataRole.UserRole)
-        if mac:
-            self._settings.rename_device(mac, item.text())
-            self._settings.save()
-
-    def _send_for_selected(self, action: str) -> None:
-        mac = self._selected_mac()
-        if mac is not None:
+    def _on_row_action(self, mac: str, action: str) -> None:
+        if action == "rename":
+            self._rename(mac)
+        elif action == "temporary":
+            self._ask_temporary(mac)
+        else:
             self.requestServiceAction.emit({"action": action, "mac": mac})
 
-    def _on_temporary(self) -> None:
-        mac = self._selected_mac()
-        if mac is None:
-            return
+    def _rename(self, mac: str) -> None:
+        current = self._settings.device_name(mac) or ""
+        text, ok = QInputDialog.getText(self, "Renommer l'appareil", "Nom (laisser vide pour effacer) :", text=current)
+        if ok:
+            self._settings.rename_device(mac, text)
+            self._settings.save()
+            self._render_devices()
+
+    def _ask_temporary(self, mac: str) -> None:
         who = self._settings.device_name(mac) or mac
         dialog = DurationDialog(
-            self,
-            "Accès temporaire",
-            f"{who} sera autorisé pendant la durée choisie, puis bloqué automatiquement.",
+            self, "Accès temporaire", f"{who} sera autorisé pendant la durée choisie, puis bloqué automatiquement."
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.requestServiceAction.emit({"action": "allow_for", "mac": mac, "seconds": dialog.seconds()})
@@ -478,6 +492,12 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(self, "WifiManager", "Remettre à zéro les compteurs de données ?")
         if answer == QMessageBox.StandardButton.Yes:
             self.requestServiceAction.emit({"action": "reset_usage"})
+
+    def _on_blocking_clicked(self) -> None:
+        if self._service is None:
+            self._on_install()
+        else:
+            self._on_uninstall()
 
     def _on_install(self) -> None:
         answer = QMessageBox.question(
@@ -584,6 +604,8 @@ def main() -> int:
         return service_main()
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("WifiManager")
+    theme.apply(app)
+    theme.watch(app)
     settings = Settings.load()
     session = PowerShellSession()
     watchdog = Watchdog(WatchdogConfig(enabled=settings.auto_restart))

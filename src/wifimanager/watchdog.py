@@ -27,6 +27,40 @@ class WatchdogConfig:
     cooldown_seconds: float = 300.0  # après trop d'échecs, nouvelle série d'essais au bout de ce délai
 
 
+class RestartGate:
+    """Limite les relances d'un programme : un délai entre deux essais, et un nombre maximal par fenêtre de temps.
+
+    Sert à relancer le service de blocage s'il s'arrête, sans jamais boucler s'il ne repart pas.
+    """
+
+    def __init__(
+        self,
+        max_attempts: int = 5,
+        window_seconds: float = 600.0,
+        cooldown_seconds: float = 20.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._max = max_attempts
+        self._window = window_seconds
+        self._cooldown = cooldown_seconds
+        self._clock = clock
+        self._attempts: list[float] = []
+
+    def allow(self) -> bool:
+        """Vrai si une relance est permise maintenant (et la compte)."""
+        now = self._clock()
+        self._attempts = [t for t in self._attempts if now - t < self._window]
+        if len(self._attempts) >= self._max:
+            return False
+        if self._attempts and now - self._attempts[-1] < self._cooldown:
+            return False
+        self._attempts.append(now)
+        return True
+
+    def reset(self) -> None:
+        self._attempts.clear()
+
+
 class Watchdog:
     def __init__(self, config: WatchdogConfig, clock: Callable[[], float] = time.monotonic) -> None:
         self.config = config

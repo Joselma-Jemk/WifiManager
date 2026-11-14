@@ -17,9 +17,10 @@ from wifimanager.models import HotspotState
 from wifimanager.neighbors import ArpReader
 from wifimanager.ps import PowerShellError, Runner
 from wifimanager.service_client import ServiceUnavailable
-from wifimanager.watchdog import Action, Watchdog
+from wifimanager.watchdog import Action, RestartGate, Watchdog
 
 SERVICE_START_WAIT_SECONDS = 30
+INSTALLED_CACHE_SECONDS = 60
 
 
 class HotspotWorker(QObject):
@@ -41,6 +42,9 @@ class HotspotWorker(QObject):
         service_call: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         install_fn: Callable[[], None] | None = None,
         uninstall_fn: Callable[[], None] | None = None,
+        start_fn: Callable[[], None] | None = None,
+        installed_fn: Callable[[], bool] | None = None,
+        service_gate: RestartGate | None = None,
     ) -> None:
         super().__init__(parent)
         self._runner = runner
@@ -50,6 +54,12 @@ class HotspotWorker(QObject):
         self._service_call = service_call or service_client.request
         self._install = install_fn or install.install_service
         self._uninstall = uninstall_fn or install.uninstall_service
+        # Par défaut on réutilise le PowerShell persistant : en lancer un nouveau coûte environ 7 secondes.
+        self._start_service = start_fn or (lambda: install.start_service(runner))
+        self._is_installed = installed_fn or (lambda: install.is_installed(runner))
+        self._installed_cache: tuple[float, bool] | None = None
+        self._service_gate = service_gate or RestartGate()
+        self._keep_service = watchdog.config.enabled  # « maintenir allumé » couvre aussi le service de blocage
         self._timer: QTimer | None = None
         self._last_state: HotspotState | None = None
 
@@ -163,8 +173,30 @@ class HotspotWorker(QObject):
             reply = self._service_call({"action": "status"})
         except ServiceUnavailable:
             self.serviceChanged.emit(None)
+            self._revive_service()
             return
+        self._service_gate.reset()  # il répond : la prochaine panne repartira d'un compteur propre
         self.serviceChanged.emit(reply if reply.get("ok") else None)
+
+    def _revive_service(self) -> None:
+        """Si « maintenir allumé » est actif et que le service installé ne répond plus, le relance (en limitant les essais)."""
+        if not self._keep_service or not self._service_installed() or not self._service_gate.allow():
+            return
+        try:
+            self._start_service()
+        except PowerShellError as exc:
+            self.failed.emit(f"Relance du service de blocage impossible : {exc}")
+        else:
+            self.message.emit("Le service de blocage s'était arrêté : relancé")
+
+    def _service_installed(self) -> bool:
+        """La tâche du service existe-t-elle ? Mémorisé une minute : inutile de le demander à chaque lecture."""
+        now = time.monotonic()
+        if self._installed_cache is not None and now - self._installed_cache[0] < INSTALLED_CACHE_SECONDS:
+            return self._installed_cache[1]
+        installed = self._is_installed()
+        self._installed_cache = (now, installed)
+        return installed
 
     @Slot(object)
     def service_action(self, payload: dict[str, Any]) -> None:
@@ -190,6 +222,7 @@ class HotspotWorker(QObject):
         self.busyChanged.emit(True)
         try:
             self._install()
+            self._installed_cache = None  # l'état vient de changer
             deadline = time.monotonic() + SERVICE_START_WAIT_SECONDS
             while True:
                 try:
@@ -218,6 +251,7 @@ class HotspotWorker(QObject):
             except ServiceUnavailable:
                 pass  # déjà arrêté
             self._uninstall()
+            self._installed_cache = None
         except PowerShellError as exc:
             self.failed.emit(f"Désactivation du blocage impossible : {exc}")
         else:
@@ -228,5 +262,8 @@ class HotspotWorker(QObject):
 
     @Slot(bool)
     def set_auto_restart(self, enabled: bool) -> None:
+        """« Maintenir allumé » : relance le hotspot s'il s'éteint, et le service de blocage s'il s'arrête."""
         self._watchdog.config.enabled = enabled
-        self.message.emit("Relance automatique activée" if enabled else "Relance automatique désactivée")
+        self._keep_service = enabled
+        self._service_gate.reset()
+        self.message.emit("Maintien activé : le hotspot et le blocage seront relancés" if enabled else "Maintien désactivé")

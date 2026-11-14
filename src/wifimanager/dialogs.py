@@ -193,6 +193,7 @@ class PassDialog(QDialog):
     def __init__(self, parent: QWidget | None, ssid: str, passphrase: str, guest: dict[str, Any]) -> None:
         super().__init__(parent)
         self.setWindowTitle("Pass invité")
+        self.setMinimumWidth(400)
         self._id = str(guest["id"])
         self._deadline = float(guest["claim_deadline"])
         self._finished = False
