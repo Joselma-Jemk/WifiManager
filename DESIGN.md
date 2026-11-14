@@ -46,10 +46,12 @@ Interface Qt (utilisateur)  ──canal local──►  Service WifiManager (adm
 ## État d'avancement
 
 - [x] Lecture de l'état et des appareils (testée sur le vrai hotspot, lecture seule)
-- [x] Écriture : démarrer, arrêter, changer nom et mot de passe (testée avec un exécuteur factice, **pas encore sur le vrai hotspot**)
-- [ ] PowerShell persistant (la lecture prend 6,7 s : trop lent pour une surveillance régulière)
-- [ ] Interface Qt : état, appareils, mot de passe + QR code
-- [ ] Surveillance et relance automatique (activable)
+- [x] PowerShell persistant : 1re lecture ~7 s (démarrage), les suivantes 0,4 à 0,6 s
+- [x] Fenêtre Qt : état, appareils nommables, changement de mot de passe avec QR code, démarrer/arrêter
+- [x] Surveillance et relance automatique (désactivée par défaut, jamais contre un arrêt fait dans l'application)
+- [x] Démarrer, arrêter, changer le mot de passe : testés avec un exécuteur factice, **pas encore sur le vrai hotspot**
 - [ ] Service administrateur et blocage WFP (à prototyper avec un appareil désigné par l'utilisateur)
 - [ ] Accès temporaires 6/12/24 h
+- [ ] Icône, zone de notification, notification à l'arrivée d'un nouvel appareil
+- [ ] Mot de passe actuel conservé dans Vault pour pouvoir réafficher le QR code
 - [ ] Installateur
