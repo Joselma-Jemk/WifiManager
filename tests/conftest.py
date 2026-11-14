@@ -14,6 +14,20 @@ def isolated_data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(scope="session")
 def qapp():
+    """Une seule application Qt pour toute la session, démontée proprement.
+
+    Sans ce démontage, Qt abandonne le processus à la sortie (« Fatal Python error: Aborted ») alors que tous les tests
+    ont réussi, ce qui fait échouer le CI.
+    """
+    import gc
+
     from PySide6.QtWidgets import QApplication
 
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
+    yield app
+    for widget in app.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+    gc.collect()
+    app.processEvents()
