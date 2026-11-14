@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime
+from importlib import resources
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -46,6 +49,27 @@ from wifimanager.widgets import (
 )
 
 __all__ = ["MainWindow", "PasswordDialog", "PassDialog", "ShareDialog", "main"]
+
+ICON_PATH = Path(__file__).parent / "assets" / "wifimanager.png"
+
+
+def _logo_bytes() -> bytes | None:
+    """Logo lu dans le paquet, y compris dans un exécutable compilé. None s'il est introuvable."""
+    try:
+        return resources.files("wifimanager").joinpath("assets").joinpath("wifimanager.png").read_bytes()
+    except (OSError, ModuleNotFoundError, TypeError):
+        pass
+    return ICON_PATH.read_bytes() if ICON_PATH.exists() else None  # lancement depuis les sources
+
+
+def app_icon() -> QIcon | None:
+    """Icône de l'application, ou None si le logo est introuvable (Windows utilise alors l'icône du programme)."""
+    data = _logo_bytes()
+    if data is None:
+        return None
+    pixmap = QPixmap()
+    return QIcon(pixmap) if pixmap.loadFromData(data) else None
+
 
 KEEP_ALIVE_HELP = (
     "Relance le hotspot s'il s'éteint, et le service de blocage s'il s'arrête. Un arrêt fait avec l'interrupteur de "
@@ -604,6 +628,9 @@ def main() -> int:
         return service_main()
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("WifiManager")
+    icon = app_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
     theme.apply(app)
     theme.watch(app)
     settings = Settings.load()

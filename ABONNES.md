@@ -71,7 +71,7 @@ Une section « Abonnés » :
 
 ## Application Flutter
 
-- Emplacement prévu : `C:\Users\Josel\StudioProjects\wifi_client`, à côté des autres projets.
+- Emplacement prévu : un dossier `wifi_client` séparé, à côté de ce projet.
 - Écrans : appairage (scan du QR code), tableau de bord (anneau du temps), historique, demande de rallonge.
 - Android d'abord ; iOS plus tard.
 - **Environnement** : Flutter 3.41.4 est installé. Android SDK et Java sont introuvables : l'app peut être écrite et

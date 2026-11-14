@@ -5,12 +5,22 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wifimanager"
 version = "0.1.0"
-description = "Gestion du hotspot Wi-Fi de Windows : mot de passe en un clic, appareils, accès temporaires, relance automatique"
+description = "Manage the Windows mobile hotspot: one-click password and QR code, devices, blocking, time-limited access, keep alive"
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "Joselma00", email = "contact@joselma.online" }]
 dependencies = ["PySide6-Essentials>=6.12.0", "segno>=1.6"]
+
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking",
+]
+
+[project.urls]
+Homepage = "https://github.com/Joselma-Jemk/WifiManager"
+Issues = "https://github.com/Joselma-Jemk/WifiManager/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=9.1.1", "ruff>=0.17.3"]
@@ -20,6 +30,9 @@ wifimanager = "wifimanager.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+wifimanager = ["assets/*.png", "assets/*.ico"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -1,0 +1,140 @@
+name: release
+
+# Un tag `v*` construit le binaire Windows (Nuitka, en dossier : pas d'extraction dans un dossier temporaire,
+# que les antivirus signalent moins souvent), l'installateur (Inno Setup) et le zip portable, les teste, puis
+# publie une release. Le lancement manuel (workflow_dispatch) construit et teste tout sans rien publier.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        shell: bash
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Le tag $GITHUB_REF_NAME ne correspond pas à la version $version de pyproject.toml" >&2
+            exit 1
+          fi
+
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  build:
+    needs: [check-version]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install
+        run: python -m pip install -e ".[dev]" nuitka
+      - name: Build binary folder (Nuitka, standalone)
+        run: >
+          python -m nuitka
+          --standalone
+          --windows-console-mode=disable
+          --enable-plugin=pyside6
+          --include-package=wifimanager
+          --include-package-data=wifimanager
+          --windows-icon-from-ico=src/wifimanager/assets/wifimanager.ico
+          --assume-yes-for-downloads
+          --company-name=Joselma00
+          --product-name=WifiManager
+          --product-version=${{ needs.check-version.outputs.version }}
+          --file-version=${{ needs.check-version.outputs.version }}
+          --file-description="Windows hotspot manager"
+          --output-dir=dist/build
+          --output-filename=wifimanager.exe
+          packaging/launcher.py
+      - name: Smoke test (the program starts and stays alive)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/build/launcher.dist/wifimanager.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "wifimanager.exe a quitté avec le code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bin
+          path: dist/build/launcher.dist
+          if-no-files-found: error
+
+  package:
+    needs: [check-version, test, build]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: bin
+          path: dist/bin
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=$version" "/DAppDir=$PWD\dist\bin" packaging\wifimanager.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC a échoué (code $LASTEXITCODE)" }
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $stage = "dist/portable"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path dist/bin/* -Destination $stage -Recurse
+          Copy-Item -Path LICENSE -Destination $stage
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/wifimanager-$version-windows-portable.zip"
+      - name: Test the installer (install, run, uninstall, service task removed)
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          ./packaging/smoke_installer.ps1 -Setup "$PWD\dist\wifimanager-$version-windows-setup.exe"
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $lines = foreach ($name in "wifimanager-$version-windows-setup.exe", "wifimanager-$version-windows-portable.zip") {
+            "{0}  {1}" -f (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower(), $name
+          }
+          # Fins de ligne Unix : `sha256sum -c SHA256SUMS` doit fonctionner tel quel.
+          [System.IO.File]::WriteAllText((Join-Path $PWD "dist/SHA256SUMS"), (($lines -join "`n") + "`n"))
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wifimanager-windows
+          path: |
+            dist/wifimanager-*-windows-setup.exe
+            dist/wifimanager-*-windows-portable.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/wifimanager-*-windows-setup.exe
+            dist/wifimanager-*-windows-portable.zip
+            dist/SHA256SUMS
+          generate_release_notes: true

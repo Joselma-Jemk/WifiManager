@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # Seules les actions GitHub sont suivies : les versions minimales des dépendances Python ne doivent pas monter sans raison.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
