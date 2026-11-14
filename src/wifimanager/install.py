@@ -12,11 +12,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from wifimanager.ps import PowerShellError, Runner, run_json, run_powershell
+from wifimanager.ps import (
+    CREATE_NO_WINDOW,
+    PowerShellError,
+    Runner,
+    run_json,
+    run_powershell,
+)
 
 TASK_NAME = "WifiManagerService"
 ELEVATION_TIMEOUT_SECONDS = 120
-_CREATE_NO_WINDOW = 0x08000000
 
 
 def service_command() -> tuple[str, str]:
@@ -97,7 +102,7 @@ def run_elevated(script: str, timeout: float = ELEVATION_TIMEOUT_SECONDS) -> Non
             text=True,
             timeout=timeout,
             check=False,
-            creationflags=_CREATE_NO_WINDOW,
+            creationflags=CREATE_NO_WINDOW,
             env=os.environ.copy(),
         )
     except subprocess.TimeoutExpired as exc:

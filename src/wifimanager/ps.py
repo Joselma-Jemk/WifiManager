@@ -17,6 +17,9 @@ from collections.abc import Callable
 from typing import Any
 
 TIMEOUT_SECONDS = 30
+# Sans ce drapeau, un programme console lancé depuis une application sans console (pythonw, le service, l'exécutable
+# installé) fait apparaître une fenêtre qui s'ouvre et se referme aussitôt. TOUT lancement de programme doit le porter.
+CREATE_NO_WINDOW = 0x08000000
 _PREAMBLE = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n$ErrorActionPreference = 'Stop'\n"
 
 # Un « exécuteur » prend un script (et des variables d'environnement) et renvoie son affichage.
@@ -39,6 +42,8 @@ def run_powershell(script: str, timeout: float = TIMEOUT_SECONDS, env: dict[str,
             errors="replace",
             timeout=timeout,
             check=False,
+            stdin=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
             env={**os.environ, **env} if env else None,
         )
     except subprocess.TimeoutExpired as exc:

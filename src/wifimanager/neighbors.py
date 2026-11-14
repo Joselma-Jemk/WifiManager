@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Callable
 
 from wifimanager.models import normalize_mac
+from wifimanager.ps import CREATE_NO_WINDOW
 
 ARP_TIMEOUT_SECONDS = 10
 _LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+((?:[0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2})\s+(\S+)")
@@ -25,6 +26,8 @@ def run_arp() -> str:
             errors="replace",
             timeout=ARP_TIMEOUT_SECONDS,
             check=False,
+            stdin=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,  # sinon une fenêtre « arp.exe » clignote à chaque lecture
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""  # sans table ARP, on affiche simplement les appareils sans adresse IP

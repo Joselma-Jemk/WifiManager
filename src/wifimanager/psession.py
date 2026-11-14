@@ -13,10 +13,9 @@ import queue
 import subprocess
 import threading
 
-from wifimanager.ps import TIMEOUT_SECONDS, PowerShellError
+from wifimanager.ps import CREATE_NO_WINDOW, TIMEOUT_SECONDS, PowerShellError
 
 _MARKER = "@@WIFIMANAGER_END@@"
-_CREATE_NO_WINDOW = 0x08000000
 
 _SERVER_LOOP = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -80,7 +79,7 @@ class PowerShellSession:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            creationflags=_CREATE_NO_WINDOW,
+            creationflags=CREATE_NO_WINDOW,
         )
         threading.Thread(target=self._read_output, args=(self._process, self._lines), daemon=True).start()
 
