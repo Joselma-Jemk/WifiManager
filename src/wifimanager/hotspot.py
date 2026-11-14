@@ -6,6 +6,7 @@ Le mot de passe actuel n'est jamais lu : on ne sait que le remplacer.
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 from wifimanager.models import Client, HotspotState, normalize_mac
@@ -124,8 +125,17 @@ def _parse_clients(raw: Any) -> list[Client]:
         names = item.get("names") or []
         if isinstance(names, str):
             names = [names]
-        clients.append(Client(mac=mac, names=tuple(str(name) for name in names if name)))
+        # Windows renvoie aussi l'adresse IP parmi les « noms d'hôte » : ce n'est pas un nom, on l'écarte.
+        clients.append(Client(mac=mac, names=tuple(str(name) for name in names if name and not _is_address(str(name)))))
     return clients
+
+
+def _is_address(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
 
 
 def start(runner: Runner = run_powershell) -> None:

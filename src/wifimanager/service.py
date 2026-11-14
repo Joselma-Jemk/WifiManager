@@ -69,10 +69,12 @@ class ServiceCore:
         self._state: HotspotState | None = None
         self._names: dict[str, tuple[str, ...]] = {}  # derniers noms d'hôte connus, même pour un appareil parti
         self._last_ips: dict[str, str] = {}
-        self._events: list[dict[str, str]] = []
+        self._events: list[dict[str, Any]] = []
+        self._event_seq = 0
         self.last_error: str | None = None
         self.last_tick: float | None = None
         self._saved = ""
+        self.on_shutdown: Callable[[], None] | None = None  # branché par main() : demande l'arrêt du service
 
     # --- sauvegarde ----------------------------------------------------------------------
 
@@ -129,7 +131,8 @@ class ServiceCore:
                 self._last_ips[client.mac] = client.ip
 
         for event in self.policy.observe([client.mac for client in clients]):
-            self._events.append({"kind": event.kind, "mac": event.mac or "", "detail": event.detail})
+            self._event_seq += 1  # numéro croissant : la fenêtre sait quels événements elle n'a pas encore annoncés
+            self._events.append({"seq": self._event_seq, "kind": event.kind, "mac": event.mac or "", "detail": event.detail})
         self._events = self._events[-50:]
 
         counters = self._counters_reader()
@@ -178,6 +181,10 @@ class ServiceCore:
                 self.policy.set_default_mode(str(request.get("mode", "")))
             elif action == "reset_usage":
                 self.usage.reset()
+            elif action == "shutdown":
+                if self.on_shutdown is not None:
+                    self.on_shutdown()  # l'arrêt retire tous les blocages : la session du pare-feu se ferme avec lui
+                return {"ok": True}
             else:
                 return {"ok": False, "error": f"Action inconnue : {action}"}
         except (PolicyError, ValueError) as exc:
@@ -298,6 +305,7 @@ def main() -> int:
         session.close()
         return 3
 
+    core.on_shutdown = lambda: QTimer.singleShot(300, app.quit)  # laisse partir la réponse avant de s'arrêter
     timer = QTimer()
     timer.timeout.connect(core.tick)
     timer.start(TICK_SECONDS * 1000)

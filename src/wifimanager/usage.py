@@ -148,7 +148,9 @@ def format_bytes(count: int) -> str:
     value = float(count)
     for unit in ("o", "Ko", "Mo", "Go", "To"):
         if value < 1000 or unit == "To":
-            text = f"{value:.0f}" if unit in ("o", "Ko") or value >= 100 else f"{value:.1f}".replace(".", ",")
-            return f"{text} {unit}"
+            text = f"{value:.0f}" if unit in ("o", "Ko") or value >= 100 else f"{value:.1f}"
+            if text.endswith(".0"):
+                text = text[:-2]  # « 80 Mo », pas « 80,0 Mo »
+            return f"{text.replace('.', ',')} {unit}"
         value /= 1000
     return f"{count} o"

@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from wifimanager import dpapi
 from wifimanager.models import normalize_mac
 
 MIN_POLL_SECONDS = 3
@@ -33,6 +34,19 @@ class Settings:
     auto_restart: bool = False
     poll_seconds: int = 10
     device_names: dict[str, str] = field(default_factory=dict)  # adresse MAC → nom choisi par l'utilisateur
+    wifi_password_protected: str = ""  # mot de passe du hotspot, protégé par DPAPI : jamais en clair dans le fichier
+
+    def set_wifi_password(self, password: str | None) -> None:
+        self.wifi_password_protected = dpapi.protect(password) if password else ""
+
+    def wifi_password(self) -> str | None:
+        """Mot de passe du hotspot, s'il est connu et lisible avec ce compte Windows."""
+        if not self.wifi_password_protected:
+            return None
+        try:
+            return dpapi.unprotect(self.wifi_password_protected)
+        except dpapi.DpapiError:
+            return None
 
     def device_name(self, mac: str) -> str | None:
         return self.device_names.get(normalize_mac(mac))
@@ -64,10 +78,12 @@ class Settings:
                     clean_names[normalize_mac(str(mac))] = str(name)[:MAX_NAME_LENGTH]
                 except ValueError:
                     continue
+        protected = raw.get("wifi_password_protected")
         return cls(
             auto_restart=raw.get("auto_restart") is True,
             poll_seconds=min(max(poll, MIN_POLL_SECONDS), MAX_POLL_SECONDS) if isinstance(poll, int) else 10,
             device_names=clean_names,
+            wifi_password_protected=protected if isinstance(protected, str) else "",
         )
 
     def save(self, path: Path | None = None) -> None:
@@ -78,6 +94,7 @@ class Settings:
             "auto_restart": self.auto_restart,
             "poll_seconds": self.poll_seconds,
             "device_names": self.device_names,
+            "wifi_password_protected": self.wifi_password_protected,
         }
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, target)

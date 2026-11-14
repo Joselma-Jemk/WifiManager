@@ -6,13 +6,20 @@ et laisse la surveillance relancer le hotspot s'il s'éteint tout seul. Tout ce 
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+from typing import Any
+
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
-from wifimanager import hotspot
+from wifimanager import hotspot, install, service_client
 from wifimanager.models import HotspotState
 from wifimanager.neighbors import ArpReader
 from wifimanager.ps import PowerShellError, Runner
+from wifimanager.service_client import ServiceUnavailable
 from wifimanager.watchdog import Action, Watchdog
+
+SERVICE_START_WAIT_SECONDS = 30
 
 
 class HotspotWorker(QObject):
@@ -21,6 +28,8 @@ class HotspotWorker(QObject):
     failed = Signal(str)  # erreur à montrer à l'utilisateur
     busyChanged = Signal(bool)
     credentialsApplied = Signal(str, str)  # nom et mot de passe appliqués, pour afficher le QR code
+    serviceChanged = Signal(object)  # état du service de blocage (dict), ou None s'il ne répond pas
+    passCreated = Signal(object)  # pass invité créé (dict : id, duration, claim_deadline…)
 
     def __init__(
         self,
@@ -29,12 +38,18 @@ class HotspotWorker(QObject):
         watchdog: Watchdog,
         poll_seconds: int = 10,
         parent: QObject | None = None,
+        service_call: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        install_fn: Callable[[], None] | None = None,
+        uninstall_fn: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._runner = runner
         self._arp_reader = arp_reader
         self._watchdog = watchdog
         self._poll_seconds = poll_seconds
+        self._service_call = service_call or service_client.request
+        self._install = install_fn or install.install_service
+        self._uninstall = uninstall_fn or install.uninstall_service
         self._timer: QTimer | None = None
         self._last_state: HotspotState | None = None
 
@@ -58,6 +73,7 @@ class HotspotWorker(QObject):
     @Slot()
     def poll(self) -> None:
         state = self._read()
+        self._poll_service()
         if state is None:
             return
         action = self._watchdog.observe(state)
@@ -139,6 +155,76 @@ class HotspotWorker(QObject):
         finally:
             self.busyChanged.emit(False)
         self._read()
+
+    # --- service de blocage -----------------------------------------------------------------
+
+    def _poll_service(self) -> None:
+        try:
+            reply = self._service_call({"action": "status"})
+        except ServiceUnavailable:
+            self.serviceChanged.emit(None)
+            return
+        self.serviceChanged.emit(reply if reply.get("ok") else None)
+
+    @Slot(object)
+    def service_action(self, payload: dict[str, Any]) -> None:
+        """Envoie un ordre au service (bloquer, autoriser, accès temporaire, pass invité…)."""
+        self.busyChanged.emit(True)
+        reply: dict[str, Any] | None = None
+        try:
+            reply = self._service_call(payload)
+        except ServiceUnavailable as exc:
+            self.failed.emit(str(exc))
+        finally:
+            self.busyChanged.emit(False)
+        if reply is not None:
+            if not reply.get("ok"):
+                self.failed.emit(str(reply.get("error", "Ordre refusé par le service")))
+            elif "pass" in reply:
+                self.passCreated.emit(reply["pass"])
+        self._poll_service()
+
+    @Slot()
+    def install_service(self) -> None:
+        """Installe le service (une fenêtre UAC), puis attend qu'il réponde."""
+        self.busyChanged.emit(True)
+        try:
+            self._install()
+            deadline = time.monotonic() + SERVICE_START_WAIT_SECONDS
+            while True:
+                try:
+                    if self._service_call({"action": "status"}).get("ok"):
+                        break
+                except ServiceUnavailable:
+                    pass
+                if time.monotonic() >= deadline:
+                    raise PowerShellError("le service ne répond pas après son installation")
+                time.sleep(1)
+        except PowerShellError as exc:
+            self.failed.emit(f"Activation du blocage impossible : {exc}")
+        else:
+            self.message.emit("Blocage activé : le service démarre à chaque ouverture de session")
+        finally:
+            self.busyChanged.emit(False)
+        self._poll_service()
+
+    @Slot()
+    def uninstall_service(self) -> None:
+        """Arrête le service (ce qui retire tous les blocages) et supprime sa tâche planifiée."""
+        self.busyChanged.emit(True)
+        try:
+            try:
+                self._service_call({"action": "shutdown"})
+            except ServiceUnavailable:
+                pass  # déjà arrêté
+            self._uninstall()
+        except PowerShellError as exc:
+            self.failed.emit(f"Désactivation du blocage impossible : {exc}")
+        else:
+            self.message.emit("Blocage désactivé : plus aucun appareil n'est bloqué")
+        finally:
+            self.busyChanged.emit(False)
+        self._poll_service()
 
     @Slot(bool)
     def set_auto_restart(self, enabled: bool) -> None:

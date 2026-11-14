@@ -112,7 +112,16 @@ def test_read_counters_without_adapter_or_powershell_gives_none() -> None:
 
 @pytest.mark.parametrize(
     "count, text",
-    [(0, "0 o"), (999, "999 o"), (12_000, "12 Ko"), (1_400_000, "1,4 Mo"), (530_000_000, "530 Mo"), (2_500_000_000, "2,5 Go")],
+    [
+        (0, "0 o"),
+        (999, "999 o"),
+        (12_000, "12 Ko"),
+        (1_400_000, "1,4 Mo"),
+        (80_000_000, "80 Mo"),
+        (530_000_000, "530 Mo"),
+        (2_500_000_000, "2,5 Go"),
+        (3_000_000_000, "3 Go"),
+    ],
 )
 def test_format_bytes(count: int, text: str) -> None:
     assert format_bytes(count) == text

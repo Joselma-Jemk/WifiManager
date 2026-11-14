@@ -47,11 +47,24 @@ Interface Qt (utilisateur)  ──canal local──►  Service WifiManager (adm
 
 - [x] Lecture de l'état et des appareils (testée sur le vrai hotspot, lecture seule)
 - [x] PowerShell persistant : 1re lecture ~7 s (démarrage), les suivantes 0,4 à 0,6 s
-- [x] Fenêtre Qt : état, appareils nommables, changement de mot de passe avec QR code, démarrer/arrêter
-- [x] Surveillance et relance automatique (désactivée par défaut, jamais contre un arrêt fait dans l'application)
-- [x] Démarrer, arrêter, changer le mot de passe : testés avec un exécuteur factice, **pas encore sur le vrai hotspot**
-- [ ] Service administrateur et blocage WFP (à prototyper avec un appareil désigné par l'utilisateur)
-- [ ] Accès temporaires 6/12/24 h
-- [ ] Icône, zone de notification, notification à l'arrivée d'un nouvel appareil
-- [ ] Mot de passe actuel conservé dans Vault pour pouvoir réafficher le QR code
+- [x] Fenêtre Qt : état, appareils nommables, mot de passe avec QR code, démarrer/arrêter, relance automatique
+- [x] **Blocage par appareil** : filtres WFP, vérifié sur le vrai PC (l'appareil bloqué ne répond plus au ping, répond
+      de nouveau au déblocage, et après l'arrêt du service)
+- [x] **Accès temporaires 6/12/24 h** (et durée libre) : l'échéance est appliquée par le service, elle survit à un redémarrage
+- [x] **Pass invité avec QR code** : le premier NOUVEL appareil qui se connecte le réclame ; mode strict (nouveaux appareils retenus)
+- [x] **Données consommées** : total exact (compteurs de l'adaptateur) ; par appareil exact s'il est seul, estimé sinon
+- [x] Service de blocage installable (tâche planifiée à l'ouverture de session, une seule fenêtre UAC) et désactivable
+- [x] Mot de passe du hotspot conservé chiffré (DPAPI) pour réafficher le QR code
+- [x] Test de bout en bout sur le vrai PC : service administrateur + client non élevé (blocage, accès temporaire, arrêt)
+- [ ] Démarrer, arrêter, changer le mot de passe : testés avec un exécuteur factice, **pas encore sur le vrai hotspot**
+- [ ] Mesure exacte des données par appareil quand plusieurs sont connectés (demande une capture de paquets)
+- [ ] Icône, zone de notification
 - [ ] Installateur
+
+## Limites connues
+
+- Le blocage vise l'adresse IP de l'appareil : un appareil qui change d'adresse est re-bloqué à la lecture suivante (5 s).
+- Une adresse MAC aléatoire changeante (confidentialité des téléphones) peut faire passer un appareil pour un nouvel appareil.
+- Un appareil bloqué reste connecté au Wi-Fi : il n'a simplement plus Internet. Seul un changement de mot de passe le déconnecte.
+- Les données consommées pendant que le service est arrêté ne sont pas comptées.
+- Si le service s'arrête, les blocages disparaissent (session dynamique) : choix de sûreté, jamais de blocage orphelin.

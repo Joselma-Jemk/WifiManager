@@ -72,6 +72,14 @@ def test_single_client_written_as_object_is_still_read() -> None:
     assert len(hotspot.read_state(FakeRunner(reply), arp).clients) == 1
 
 
+def test_ip_addresses_are_not_mistaken_for_device_names() -> None:
+    reply = {**SAMPLE, "clients": [{"mac": "AA-BB-CC-DD-EE-01", "names": ["Redmi-13C", "192.168.137.41", "fe80::1"]}]}
+    state = hotspot.read_state(FakeRunner(reply), arp)
+    assert state.clients[0].names == ("Redmi-13C",)
+    only_ip = {**SAMPLE, "clients": [{"mac": "AA-BB-CC-DD-EE-01", "names": ["192.168.137.41"]}]}
+    assert hotspot.read_state(FakeRunner(only_ip), arp).clients[0].label == "aa:bb:cc:dd:ee:01"  # retombe sur la MAC
+
+
 def test_unreadable_mac_is_skipped_not_fatal() -> None:
     reply = {**SAMPLE, "clients": [{"mac": "pas-une-mac"}, SAMPLE["clients"][0]]}
     assert [c.mac for c in hotspot.read_state(FakeRunner(reply), arp).clients] == ["aa:bb:cc:dd:ee:01"]
