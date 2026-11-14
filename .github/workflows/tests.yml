@@ -21,4 +21,6 @@ jobs:
       - name: Lint
         run: python -m ruff check src tests --select E,F,W,I --ignore E501
       - name: Test
-        run: python -m pytest -q
+        run: |
+          python -X faulthandler -m pytest -q
+          Write-Output "pytest exit code: $LASTEXITCODE"
