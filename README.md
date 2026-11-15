@@ -46,6 +46,9 @@ administrator rights and installs into `Program Files` on purpose: the blocking 
 must not be writable by ordinary users. A portable `.zip` is also published. Uninstalling removes the service task and
 keeps your settings.
 
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/). See the [code signing policy](docs/CODE_SIGNING_POLICY.md).
+
 From the sources:
 
 ```bash

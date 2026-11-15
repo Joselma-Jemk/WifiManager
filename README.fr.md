@@ -46,6 +46,9 @@ les droits administrateur et s'installe volontairement dans `Program Files` : le
 droits élevés, son dossier ne doit donc pas être modifiable par un simple utilisateur. Un `.zip` portable est aussi
 publié. La désinstallation retire la tâche du service et conserve tes réglages.
 
+Signature de code gratuite fournie par [SignPath.io](https://about.signpath.io/), certificat de
+[SignPath Foundation](https://signpath.org/). Voir la [politique de signature](docs/CODE_SIGNING_POLICY.md).
+
 Depuis les sources :
 
 ```bash

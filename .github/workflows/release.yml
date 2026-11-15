@@ -3,6 +3,10 @@ name: release
 # Un tag `v*` construit le binaire Windows (Nuitka, en dossier : pas d'extraction dans un dossier temporaire,
 # que les antivirus signalent moins souvent), l'installateur (Inno Setup) et le zip portable, les teste, puis
 # publie une release. Le lancement manuel (workflow_dispatch) construit et teste tout sans rien publier.
+#
+# Signature (SignPath Foundation, gratuite pour les projets open source) : les étapes « Signer… » ne tournent que si la
+# variable de dépôt SIGNPATH_ORGANIZATION_ID est définie. Sans elle, le workflow produit des binaires non signés comme avant.
+# Pour l'activer, voir docs/CODE_SIGNING_POLICY.md.
 on:
   push:
     tags: ["v*"]
@@ -10,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   check-version:
@@ -68,6 +73,32 @@ jobs:
           --output-dir=dist/build
           --output-filename=wifimanager.exe
           packaging/launcher.py
+      - uses: actions/upload-artifact@v7
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        id: upload-unsigned-bin
+        with:
+          name: unsigned-bin
+          path: dist/build/launcher.dist
+          if-no-files-found: error
+      - name: Signer wifimanager.exe (SignPath)
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-bin.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/signed-bin
+      - name: Remplacer par la version signée
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          Copy-Item -Path dist/signed-bin/* -Destination dist/build/launcher.dist -Recurse -Force
+          if (-not (Get-AuthenticodeSignature dist/build/launcher.dist/wifimanager.exe).SignerCertificate) {
+            throw "wifimanager.exe n'est pas signé après l'étape SignPath"
+          }
       - name: Smoke test (the program starts and stays alive)
         shell: pwsh
         run: |
@@ -98,6 +129,33 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           & $iscc "/DAppVersion=$version" "/DAppDir=$PWD\dist\bin" packaging\wifimanager.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC a échoué (code $LASTEXITCODE)" }
+      - uses: actions/upload-artifact@v7
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        id: upload-unsigned-setup
+        with:
+          name: unsigned-setup
+          path: dist/wifimanager-${{ needs.check-version.outputs.version }}-windows-setup.exe
+          archive: false
+          if-no-files-found: error
+      - name: Signer l'installateur (SignPath)
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-setup.outputs.artifact-id }}
+          artifact-configuration-slug: setup-exe
+          skip-decompress: true
+          wait-for-completion: true
+          output-artifact-directory: dist/signed-setup
+      - name: Remplacer par l'installateur signé
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          Move-Item -Path "dist/signed-setup/wifimanager-$version-windows-setup.exe" -Destination "dist/wifimanager-$version-windows-setup.exe" -Force
       - name: Build portable zip
         shell: pwsh
         run: |
